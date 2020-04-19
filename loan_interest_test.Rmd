@@ -1,0 +1,666 @@
+---
+title: "loan_interest_rates"
+author: "Ke Guan"
+date: "6/30/2019"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is a markdown document of determining interest rates for loans.
+
+```{r}
+load_data=read.csv(file="C:/Users/nimok/Desktop/Analyst_Test/loan_interest_rates.csv", header=T,na.strings=c("","NA"))
+```
+## 1. Explore variables of this dataset
+
+### 1.1 Type Checking, fix and imputation
+```{r}
+#take a quick look 
+str(load_data)
+```
+### X1
+X1 is the interest rate on the loan which is the prediction. According to the rate information posted by the Lending Club, the interest rates take credit risk and market conditions into account. The final interest rates are influenced by the loan grades modified to the Base Risk Subgrades. The Lending Club utilizes credit risk indicators including request loan amount and loan maturity to modify these Subgrades.
+X1 contains the percentages. To better predict the interest rates, need to extract the numbers from X1 which is stored as a categorical factor. And omit observations with NA in X1.
+```{r}
+load_data$X1=as.numeric(gsub("%","", load_data$X1))
+typeof(load_data$X1)
+sum(is.na(load_data$X1))
+load_data1=load_data[!is.na(load_data$X1),]
+dim(load_data1)
+```
+### X2 and X3
+X2 and X3 are unique ids for the loan and borrowers, and they don't contribute too considerably to the prediction. Therefore, these two columns can be dropped. Before dropping these two columns, check if there are duplicate ids for X2. If any two ids are the same, the duplicate observation will be deleted. The result shows there is no duplicate observation.
+```{r}
+n_occur=data.frame(table(load_data1$X2))
+n_occur[n_occur$Freq>1,]
+rm(n_occur)
+# drop X2, X3
+load_data1=within(load_data1, rm(X2, X3))
+dim(load_data1)
+```
+
+### X4, X5, X6
+X4, the loan amount requested, as mentioned hitherto, is an indicator for Base Risk Subgrade, which comprises a significant factor based on the risk information of the Lending Club. From the above glimpse of the data, X4 is categorical with 1340 levels. First, let’s see if there exists missing value.
+```{r}
+#na value
+sum(is.na(load_data1$X4))
+```
+Only one observation has NA in X4. Take a close look at this observation.
+```{r}
+load_data1[is.na(load_data1$X4),]
+```
+This observation merely has value in X1, then we can simply drop this observation.
+```{r}
+load_data1=load_data1[!is.na(load_data1$X4),]
+
+dim(load_data1)
+
+```
+As it includes thousands of levels with numeric values, considering it as a numeric variable would be more meaningful. X5, the loan amount funded, X6, an investor-funded portion of the loan, are also categorical with thousands of levels. So converting them to numbers without "$" as well.
+```{r}
+sum(is.na(load_data1$X5))
+sum(is.na(load_data1$X6))
+```
+```{r}
+load_data1$X4=as.numeric(gsub(",|\\$","", load_data1$X4))
+load_data1$X5=as.numeric(gsub(",|\\$","", load_data1$X5))
+load_data1$X6=as.numeric(gsub(",|\\$","", load_data1$X6))
+head(load_data1)
+par(mfrow=c(2,2))
+boxplot(load_data1$X4, main='loan amount requested', col='yellow')
+boxplot(load_data1$X5, main="loan amount funded", col='blue')
+boxplot(load_data1$X6, main='investor-funded portion of loan', col='red')
+par(mfrow=c(1,1))
+```
+
+### X7, X8, X9
+X7, the number of payments (36 or 60), is the other significant indicator to modify the Base Risk Subgrade. Take a look at the distribution of diverse levels.
+```{r}
+# distribution of the categorical variable
+sum(is.na(load_data1$X7))
+levels(load_data1$X7)
+
+# drop the unused level
+load_data1$X7=droplevels(load_data1)$X7
+x7_freq=table(load_data1$X7)
+x7_freq
+library(ggplot2)
+#barplot(x7_freq, xlab='number of payments', width=0.1, col='yellow',main="distribution for number of payment", ylab="Frequency")
+ggplot(load_data1, aes(x=X7))+geom_bar(stat = 'count', fill=c("#DAF7A6","#FFC300"))+labs(fill="month of payments",x="Month of Payments", y="frequency")+ggtitle("distribution of month payments ")
+```
+
+X8 and X9, the loan grade and subgrade are the leading factors to evaluate the interest rate on the loan. There is a sizeable portion of missing value in X9, as well as X8.
+```{r}
+sum(is.na(load_data1$X8))
+sum(is.na(load_data1$X9))
+```
+
+```{r}
+load_data1$X8=droplevels(load_data1)$X8
+x8_freq=table(load_data1$X8)
+x8_prop=prop.table(x8_freq)
+load_data1$X9=droplevels(load_data1)$X9
+x9_freq=table(load_data1$X9)
+x9_prop=prop.table(x9_freq)
+## distribution of the grade and subgrade 
+ggplot(load_data1, aes(x=X8))+geom_bar(stat = 'count', aes(fill=X8))+theme(axis.text.x = element_text(angle = 90, hjust = 1))+labs(x="loan grade",fill="loan grade", y="frequency")+ggtitle("distribution of loan grade ")
+ggplot(load_data1, aes(x=X9))+geom_bar(stat = 'count',aes(fill=X9))+theme(axis.text.x = element_text(angle = 90, hjust = 1))+labs(x="loan grade", y="frequency")+ggtitle("distribution of loan subgrade ")
+```
+
+Indicators for modifying subgrade are X4 (loan amount request) and X7 (number of payment). First, divide the data into two parts. One with missing X9 values, another part without it.
+```{r}
+train=load_data1[!is.na(load_data1$X9),]
+test=load_data1[is.na(load_data1$X9),]
+```
+
+To detect the missing of X9 is missing at random or not (MAR). From the result, p=0.3963 represents the true difference in means is 0. Hence, consider the X9 as missing at Random.
+```{r}
+t.test(train$X4, test$X4)
+```
+
+Using sequential hot-deck imputation to fill the missing data as X9 containing missing value is sorted according to one or more auxiliary variables.
+```{r}
+x=load_data1$X9
+tail(x, n=1)
+#last value is not empty
+seqImpute=function(x){
+  n=length(x)
+  i=is.na(x)
+  while(any(i)){
+    x[i]=x[which(i)+1]
+    i=is.na(x)
+  }
+  x[1:n]
+}
+## distribution of subgrade after filling the missing data
+load_data1$X9=seqImpute(x)
+load_data1$X9=droplevels(load_data1)$X9
+x9_freq=table(load_data1$X9)
+x9_prop=prop.table(x9_freq)
+ggplot(load_data1, aes(x=X9))+geom_bar(stat = 'count',aes(fill=X9))+theme(axis.text.x = element_text(angle = 90, hjust = 1))+labs(x="loan grade", y="frequency")+ggtitle("distribution of loan subgrade ")
+```
+
+X8, the loan grade, can be extracted from X9.
+```{r}
+load_data1$X8=as.factor(gsub("[^a-zA-Z]", "",load_data1$X9 ))
+## check the missing value
+sum(is.na(load_data1$X8))
+sum(is.na(load_data1$X9))
+```
+
+Let's identify the relationship between X9 and X7. Compared to 36 months, borrowers prefer 36 months payments.
+```{r}
+library(ggplot2)
+ggplot(load_data1, aes(x=X9))+geom_bar(stat = 'count',aes(fill=X9))+facet_grid(~X7)+theme(axis.text.x = element_text(angle = 90, hjust = 1))+labs(x="Month of Payment", y="frequency")+ggtitle("distribution of loan subgrade between two levels of month payment")
+ggplot(load_data1, aes(x=X8))+geom_bar(stat = 'count',aes(fill=X8))+facet_grid(~X7)+labs(fill="loan grade",x="Month of Payment", y="frequency")+ggtitle("distribution of loan grade between two levels of month payment")
+```
+
+### X10, X11
+X10 (self-filled employer of job title) shows 187823 different values and 23969 missing values. X11, number of work experience (0 to 10; 10=10 or more), possesses 12 levels. Its distribution indicates the number of borrowers with 10+ work experience about 2-3 times more than others.
+```{r}
+sum(is.na(load_data1$X10))
+sum(is.na(load_data1$X11))
+load_data1$X11=droplevels(load_data1)$X11
+ggplot(load_data1, aes(x=X11))+geom_bar(stat = "count", aes(fill=X8))+labs(fill="loan grade", x="Work Experience", y="Frequency")+ggtitle("distribution of the work experience")
+```
+
+### X12
+X12, home ownership status, an indicator reflects the ability to pay off the loan. Fill the missing values of house ownership status with "UNKNOWN'. And combine "ANY", "OTHER", and "NONE" together to reset the level to "OTHER".
+```{r}
+library(car)
+sum(is.na(load_data1$X12))
+load_data1$X12=droplevels(load_data1)$X12
+x12_prop=prop.table(table(load_data1$X12))
+x12_prop
+load_data1$X12_cb=Recode(load_data1$X12, "c(NA, 'ANY', 'NONE','OTHER')='OTHER'") 
+x12_prop=prop.table(table(load_data1$X12_cb))
+ggplot(load_data1, aes(x=X12_cb))+geom_bar(stat = "count", aes(fill=X8))+labs(fill="loan grade", x="Home Ownership", y="Frequency")+ggtitle("distribution of the home ownership")
+ggplot(load_data1, aes(x=X8))+geom_bar(stat = "count",aes(fill=X8))+facet_grid(~X12_cb)+labs( x="Loan Grade", y="Frequency")+ggtitle("distribution of the grade among home ownership")
+
+```
+
+### X13
+X13, the annual income of the borrower, a numeric variable. Check the missing values and replace them with the mean.
+```{r}
+sum(is.na(load_data1$X13))
+summary(load_data1$X13)
+load_data1$X13[is.na(load_data1$X13)]=mean(load_data1$X13, na.rm = T)
+sum(is.na(load_data1$X13))
+summary(load_data1$X13)
+ggplot(load_data1, aes(y=X13))+geom_boxplot(outlier.color = "blue")+ggtitle("boxplot of the annual income of borrower")
+```
+
+### X14
+X14, income source verified or not.
+```{r}
+sum(is.na(load_data1$X14))
+load_data1$X14=droplevels(load_data1)$X14
+x14_prop=prop.table(table(load_data1$X14))
+ggplot(load_data1, aes(x=X14))+geom_bar(stat = 'count',aes(fill=X8))+labs(fill="loan grade", x="Income Verified", y="Frequency")+ggtitle("distribution of the income verified")
+ggplot(load_data1, aes(x=X8))+geom_bar(stat = 'count',aes(fill=X8))+facet_grid(~X14)+labs(fill="loan grade", x="Loan Grade", y="Frequency")+ggtitle("distribution of the loan grade among income verified")
+```
+
+### x15
+X15, date loan was issued. Time has an influence on market conditions. Extracting the year from the date values to focus on the impact of years.
+```{r}
+head(load_data1$X15, n=1)
+
+library(stringr)
+load_data1$X15_year=gsub("-*[A-Za-z]","",load_data1$X15)
+head(load_data1$X15_year)
+sum(is.na(load_data1$X15_year))
+```
+The result below shows the number of issues loans increases every year. And every year the loan issued to borrowers with grade A comprises a sizeable proportion.
+
+```{r}
+load_data1$X15_year=factor(droplevels(load_data1)$X15_year, levels = c("7","8","9","10","11","12","13","14"))
+table(load_data1$X15_year)
+ggplot(load_data1, aes(x=X15_year))+geom_bar(stat = 'count',aes(fill=X8))+labs(fill='loan grade',x="Year",y="Frequency")+ggtitle("distribution of the isssued loan for each year")
+```
+
+### X16, X17 and X18
+X16 (reasons for the loan), X17 (loan Category) and X18 (loan title) convey the same information. Hence, merely take X17 into consideration. Most people apply loan for debt consolidation.
+```{r}
+#missing value of the loan categories
+sum(is.na(load_data1$X17))
+# distribution of the loan categories
+load_data1$X17=droplevels(load_data1)$X17
+library(ggplot2)
+table(load_data1$X17)
+ggplot(load_data1, aes(x=X17))+geom_bar(stat = "count",aes(fill=X8))+labs(x="Loan Category",y="Frequency") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ggtitle("distribution of The loan Category")
+```
+
+### X19
+X19 is the state of the borrower, from the distribution of the state of borrowers. People have high frequencies of requesting the loan in CA, NY, TX, FL
+```{r}
+sum(is.na(load_data1$X19))
+load_data1$X19=droplevels(load_data1)$X19
+ggplot(load_data1, aes(x=X19))+geom_bar(stat = "count",aes(fill=X8))+labs(fill='loan grade',x="Loan State",y="Frequency") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ggtitle("distribution of borrowers' state")
+```
+
+### X20
+X20, the ratio calculated employing the borrower’s total monthly debt payments on the total debt obligations, is a numeric factor. The minimal payment ratio is 0, and the maximal payment ratio is 39.99. Mean of payment ratio is 17.00.
+```{r}
+sum(is.na(load_data1$X20))
+summary(load_data1$X20)
+ggplot(load_data1, aes(y=X20))+geom_boxplot(outlier.color = "blue")+ggtitle("boxplot of the debt payment ratio")+labs(y="ratio of payments on total debt")
+```
+
+### X21
+X21, the number of 30+ days past-due incidences of delinquency in the borrower's credit file for the past 2 years, is a numeric variable as well. The minimal number of incidences is 0; the maximum is 29. Mean is 0.2745. However, most borrowers produce 0 delinquencies.
+```{r}
+sum(is.na(load_data1$X21))
+load_data1$X21=as.numeric(load_data1$X21)
+summary(load_data1$X21)
+ggplot(load_data1, aes(y=X21))+geom_boxplot(outlier.color = "blue")+ggtitle("boxplot of the incidences of delinquency")
+```
+
+### X22
+X22, the date the borrower's earliest reported credit line was opened, is a categorical variable with date values. Same as X15, extract the year from these date values.
+
+```{r}
+sum(is.na(load_data1$X22))
+library(stringr)
+numextract <- function(string){ 
+  str_extract(string, "\\-*\\d+\\.*\\d*")
+  
+} 
+load_data1$X22_year=as.numeric(gsub("-","",numextract(load_data1$X22)))
+
+head(load_data1$X22_year, n=20)
+sum(is.na(load_data1$X22_year))
+```
+
+From the distribution, the result shows that the number of borrowers opening the first credit line increase from 1944 to 2000 and decrease from 2000 to 2011.
+```{r}
+load_data1$X22_year=factor(droplevels(load_data1)$X22_year)
+# distribution of people opening the first credit line in that year
+ggplot(load_data1, aes(x=X22_year, fill=X8))+geom_bar(stat = 'count')+labs(fill="loan grade", x="Year",y="Frequency")+theme(axis.text.x = element_text(angle = 90, hjust = 1))+ggtitle("distribution of people opening first credit line in that year")
+```
+
+### X23, X24
+X23, number of months since the borrower's last delinquency, is a numeric variable. The portion of missing value arrives at 55.4%. In that case, unambiguously, drop this variable. X24, number of months since the last public record, is withal a numeric variable. The portion of missing value arrives at 87.2%, so drop this variable as well.
+```{r}
+sum(is.na(load_data1$X23))
+summary(load_data1$X23)
+sum(is.na(load_data1$X23))/sum(!is.na(load_data1$X22))
+sum(is.na(load_data1$X24))
+summary(load_data1$X24)
+sum(is.na(load_data1$X24))/sum(!is.na(load_data1$X22))
+```
+
+### X25
+X25, the number of derogatory public records. The minimal number of derogatory is 0, and the maximum is 63. Mean is 0.1532. However, based on the boxplot, only 50485 observations have the number of derogatory public records non-zero.
+```{r}
+sum(is.na(load_data1$X25))
+load_data1$X25=as.numeric(load_data1$X25)
+sum(load_data1$X25!=0)
+summary(load_data1$X25)
+ggplot(load_data1, aes(y=X25))+geom_boxplot(outlier.color = "blue")+ggtitle("boxplot of the number of derogatory public records")
+```
+
+### X26
+X26, the total number of credit lines currently in the borrower's credit file. The minimum is 2, mean is 25, the maximum is 118.
+```{r}
+sum(is.na(load_data1$X26))
+load_data1$X26=as.numeric(load_data1$X26)
+summary(load_data1$X26)
+ggplot(load_data1, aes(y=X26))+geom_boxplot(outlier.color = "blue")+ggtitle("boxplot of the credit lines")
+# take a look at the person with 118 credit lines
+load_data1[load_data1$X26==118,]
+
+```
+
+### X27
+X27, the initial listing status of the loan, includes two levels: "W" and "F".
+```{r}
+sum(is.na(load_data1$X27))
+load_data1$X27=droplevels(load_data1)$X27
+ggplot(load_data1, aes(x=X27, fill=X8))+geom_bar(stat = "count")+labs(fill="loan grade" ,x="Loan Status",y="Frequency")+ggtitle("distribution of loan status")
+ggplot(load_data1, aes(x=X8, fill=X8))+geom_bar(stat = 'count')+facet_grid(~X27)+labs( x="Loan Grade",fill="loan grade", y="Frequency")+ggtitle("distribution of the loan grade among Status of loan")
+```
+
+### 1.2 Reform dataframe and normalize numeric variables
+
+There are several numeric variables with diverse scales. To decrease the scaling influence for prediction, apply the z-score standardization as some variables have extreme outliers.
+```{r}
+dim(load_data1)
+load_data2=within(load_data1, rm(X10,X12,X15,X16,X18,X22,X23,X24))
+str(load_data2)
+dim(load_data2)
+num_df=c('X4', 'X5', 'X6','X13','X20','X21','X25','X26')
+cat_var=c('X7','X8','X9','X11','X14','X17','X19','X27','X12_cb','X15_year','X22_year')
+load_data3_num=as.data.frame( scale(load_data2[num_df] ))
+load_data3=cbind(load_data2$X1,load_data3_num, load_data2[,cat_var] ) 
+names(load_data3)[names(load_data3)=="load_data2$X1"]="X1"
+```
+
+Now, there is a dataset with normalized numeric variables and categorical variables named "load_data3". 
+
+## 2. Testing the significance of variables
+
+### 2.1 correlation among numeric variables
+```{r}
+cor=round(cor(load_data3[,c("X1",num_df)]),2)
+library(reshape2)
+
+cor[upper.tri(cor)]=NA
+cormat=melt(cor, na.rm = T)
+library(ggplot2)
+##correlation matrix heatmap
+ggplot(data = cormat, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))+
+ coord_fixed()+geom_text(aes(Var2, Var1, label = value), color = "black", size = 4) +
+theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  axis.ticks = element_blank(),
+  legend.justification = c(1, 0),
+  legend.direction = "horizontal")+
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                title.position = "top", title.hjust = 0.5))
+
+```
+
+From the previous result, correlation coefficients of X4, X5, and X6 equal to 1, which means these variables are collinear. X1 and X13 demonstrate a negative correlation, which means borrowers maintain high annual income will get a lower interest rate. It makes sense people with more upper income prove more able to pay off loans. X1 and X26 as well exhibit a negative correlation. The more credit lines borrowers open, the lower interest rates they will get when applying for the loans. It is possible people with a great number of credit lines will have a good loan grade.
+
+Let's perceive the relationship among the loan grade, annual income, and interest rates, as well as loan grade, the numbers of credit lines and interest rates. From the relationships, when borrowers have level A loan grade, the higher annual income they gain, the lower interest rates they get. Also, the more credit lines they open, the interest rates are lower. However, for borrowers from the level G group, people with higher income or more credit lines have higher interest rates.
+```{r}
+# graphs of relationship
+ggplot(data=load_data3, aes(x=X13, y=X1, color=X8))+geom_point(color="grey")+geom_smooth(method="lm")+labs(x="annual income", y="interest rates", color="loan grade")+ggtitle("relationship between annual income and interest rates among different loan grades")
+ggplot(data=load_data3, aes(x=X26, y=X1, color=X8))+geom_point(color="grey")+geom_smooth(method="lm")+labs(x="number of credit lines", y="interest rates", color="loan grade")+ggtitle("relationship between number of credit lines and interest rates among different grades")
+
+```
+
+### 2.2 significance of the numerica variables
+```{r}
+fm=aov(X1~X4+X13+X20+X21+X25+X26, data=load_data3)
+summary(fm)
+```
+
+### 2.3 interaction effect, and interests among different groups
+```{r}
+# interaction among varibles and loan grade
+par(mfrow=c(2,2))
+interaction.plot(load_data3$X7, load_data3$X8, load_data3$X1)
+interaction.plot(load_data3$X11, load_data3$X8, load_data3$X1)
+interaction.plot(load_data3$X12_cb, load_data3$X8, load_data3$X1)
+interaction.plot(load_data3$X14, load_data3$X8, load_data3$X1)
+interaction.plot(load_data3$X17, load_data3$X8, load_data3$X1)
+interaction.plot(load_data3$X19, load_data3$X8, load_data3$X1)
+interaction.plot(load_data3$X15_year, load_data3$X8, load_data3$X1)
+interaction.plot(load_data3$X22, load_data3$X8, load_data3$X1)
+interaction.plot(load_data3$X27, load_data3$X8, load_data3$X1)
+interaction.plot(load_data3$X15_year, load_data3$X7, load_data3$X1)
+par(mfrow=c(1,1))
+```
+
+
+Within the same group, borrowers who have 60 months payments tend to have higher interest rates, and when borrowers have the same number of payments, greater level loan grades they have, lower interest rates they will be requested.
+```{r}
+library(dplyr)
+# intereaction between the number of payment and loan grade and their effects on interest rates
+tmp=load_data3 %>% group_by(X8,X7) %>% summarise(interest=mean(X1))
+ggplot(data=tmp, aes(x=X8, y=interest, color=X7))+geom_line(aes(group=X7))+geom_point()+labs(x="loan grade", y="interest rates", color="number of payment")+ggtitle("interaction between number of payment and loan grade")
+```
+
+Within the same loan grade group, borrowers with verified income or income source have almost the same interest rate. Borrowers whose incomes are unverified tend to have a lower interest rate. But the difference is not too much.
+```{r}
+## interaction between income verified and loan grade
+tmp=load_data3 %>% group_by(X8,X14) %>% summarise(interest=mean(X1))
+ggplot(data=tmp, aes(x=X8, y=interest, color=X14))+geom_line(aes(group=X14))+geom_point()+labs(color="income verified", y="interest rates", x="loan grade")+ggtitle("interaction between income verified and loan grade")
+```
+
+Within the same loan issued year, obviously that borrowers have better loan grade will get lower interest rates. And interest rates for the same loan grade fluctuate every year. Interest rates went up from 2008 to 2009 and fell from 2009 to 2010, and then went up again from 2010 to 2014.
+```{r}
+tmp=load_data3 %>% group_by(X8,X15_year) %>% summarise(interest=mean(X1))
+ggplot(data=tmp, aes(x=X15_year, y=interest, color=X8))+geom_line(aes(group=X8))+geom_point()+labs(X=" loan issued year", y="interest rates", color="loan grade")+ggtitle("interaction between loan issued year and loan grade")
+```
+
+The interest rates for borrowers in 60 months of payments group fluctuate every year. And the trends of fluctuations went up from 2007 to 2009 and fell from 2009 to 2010. Then went up again. Before 2010, there were no records for borrowers in 60 months of payment group. Interest rates for 60 months of payments went up from 2010 to 2012 and then fell to 2014.
+```{r}
+# interaction between loan issued year and number of payments
+tmp=load_data3 %>% group_by(X7,X15_year) %>% summarise(interest=mean(X1))
+ggplot(data=tmp, aes(x=X15_year, y=interest, color=X7))+geom_line(aes(group=X7))+geom_point()+labs(X=" loan issued year", y="interest rates", color="number of payments")+ggtitle("interaction between loan issued year and number of payments")
+```
+
+From the previous results, clearly see that, within the same grade, level interest rates for diverse groups of work experience, home ownership status, loan category, state of the borrower, the date of the borrower’s earliest reported credit line was opened virtually keep the same and loan status. Variables that exert apparent effects are a number of payments, income verified or not, and loan issued years.
+
+So far, the relatively important variables are X4, X8/X9, X13, X20, X21, X25, X26, X7, X14, X15_year.
+
+## 3. Sampling
+### 3.1 sampling by group
+Sampling based on loan groups. The supposed sample size is 5000, according to the distribution of the loan grade, the number of sample extract from each group can be counted. 
+
+```{r}
+library(dplyr)
+library(purrr)
+library(tidyr)
+set.seed(9933)
+5000*round(x8_prop,3)
+sig=c('X1', 'X8','X4','X13', 'X20', 'X21', 'X25', 'X26', 'X7', 'X14', 'X15_year')
+sample_data=load_data3[,sig]%>% group_by(X8) %>% nest() %>% mutate(n=c(795,1500,1330,820,375,145,35)) %>% mutate(samp=map2(data, n, sample_n)) %>% select(X8, samp) %>% unnest()
+dim(sample_data)
+```
+
+### 3.2 inference of sample
+The result shows the distribution of the X1 from the sample is almost the same as the distribution of X1 from the load_data3. 
+```{r}
+library(ggpubr)
+par(mfrow=c(2,2))
+ggdensity(sample_data$X1, main="Density plot of interest rates", xlab="Interest Rate")
+ggdensity(load_data3$X1, main="Density plot of interest rates", xlab="Interest Rate")
+ggqqplot(sample_data$X1)+ggtitle("QQ plot for interest rates of sample data")
+ggqqplot(load_data3$X1)+ggtitle("QQ plot for interest rates of data pool")
+
+```
+
+### 3.3 normality of y
+```{r}
+library(rcompanion)
+plotNormalHistogram(load_data3$X1)
+plotNormalHistogram(sample_data$X1)
+```
+
+## 4. fit model
+
+### 4.1 Split data to train and test data
+Split data onto two parts, the ratio of training data to test data is 0.8:0.2.
+```{r}
+n=5000
+ind=sample(c(TRUE, FALSE), n, replace=TRUE, prob=c(0.8, 0.2))
+train=sample_data[ind,]
+test=sample_data[!ind,]
+train_y=train$X1
+train_x=train[,-c(2)]
+test_y=test$X1
+test_x=test[, -c(2)]
+```
+
+### 4.2 Random Forest
+Using Random Forest to fit the data, get the test error is 6.48, and the most 5 important variables are X8, X7, X15_year, X4, and X14.
+```{r}
+library(randomForest)
+set.seed(9933)
+# fit model with random forest
+model.rf=randomForest(X1~., data=sample_data,subset=ind, mtry=2,ntree=50, importance=T) # fit the random forest
+predict.rf=predict(model.rf, newdata = test)
+# Estimate test error rate
+rf.se=mean((predict.rf-test_y)^2)
+rf.se
+#Get variable importance measure for each predictor
+importance(model.rf)
+varImpPlot(model.rf)
+
+```
+
+### 4.3 Boosting
+The boosted regression model has a mean error rate of 7.73. And the relative critical variables are X8, X20, X13, X4, X26, X15_year.
+```{r}
+library(gbm)
+set.seed(9933)
+ # Fit a boosted regression tree
+model.boost=gbm(X1~ ., data = train, distribution = "gaussian", 
+	n.trees = 5000, interaction.depth = 4)
+# Get the relative influence plot
+summary(model.boost)
+# Estimate test error rate for the boosted model
+predict.boost <- predict(model.boost, newdata = test, 
+	n.trees = 5000)
+boost.se=mean((predict.boost - test_y)^2)
+boost.se
+```
+
+### 4.4 Lasso Regression
+Lasso model shows the mean squared error is 6.62.
+```{r}
+library(glmnet)
+set.seed(9933)
+x=model.matrix(X1 ~ ., sample_data)[, -1]
+y=sample_data$X1
+# Set up a grid of lambda values (from 10^10 to 10^(-2)) in decreasing sequence
+grid <- 10^seq(10, -2, length = 100)
+# fit lasso with each lambda
+model.lasso <- glmnet(x[ind,], y[ind], alpha = 1, lambda = grid)
+plot(model.lasso, xvar = "lambda")
+# Use cross-validation to estimate test MSE using training data 
+cv.out <- cv.glmnet(x[ind,], y[ind], alpha = 1)
+plot(cv.out)
+bestlam <- cv.out$lambda.min
+bestlam
+predict.lasso <- predict(model.lasso, s = bestlam, newx = x[!ind,])
+lasso.se=mean((predict.lasso - test_y)^2)
+lasso.se
+```
+
+### 4.5 linear regression
+First, select the model with the lowest AIC value.
+```{r, include=FALSE}
+### create dummy variables
+dummy_train_x=model.matrix(X1~., dat=train)[,-1]
+dummy_test_x=model.matrix(X1~., data=test)[,-1]
+
+dummy_train=data.frame(cbind(train_y,dummy_train_x))
+names(dummy_train)[names(dummy_train)=="train_y"]="X1"
+
+dummy_test=data.frame(cbind(test_y, dummy_test_x))
+names(dummy_test)[names(dummy_test)=="test_y"]="X1"
+
+model.null=lm(X1~1, data=dummy_train)
+model.full=lm(X1~., data=dummy_train)
+set.seed(9933)    
+step(model.null,scope = list(upper=model.full),
+             direction="both",
+             data=dummy_train) 
+```
+
+```{r}
+
+model.final=lm(X1 ~ X7.60.months + X8D + X8E + X8F + X8C + X8G + 
+    X8B + X15_year13 + X15_year10 + X15_year11 + X14VERIFIED...income + 
+    X26 + X20 + X21 + X25 + X15_year12 + X15_year8, data = dummy_train)
+par(mfrow=c(2,2))
+plot(model.final)
+```
+
+Fit regression model and the mean squared error rate is 6.59.
+```{r}
+predict.lr=predict(model.final, newdata =dummy_test[,-c(1)] , se.fit = T, interval = "confidence")
+lr.se=mean((predict.lr$fit[,1]-test_y)^2)
+lr.se
+```
+
+### 4.6 neural network
+Fit neural network model with 3 hidden layers. The mean squared error of the neural network model is 7.16.
+```{r}
+#install.packages("neuralnet")
+library(neuralnet)
+set.seed(9933)
+#scale X1
+scale_01 <- function(x){
+  (x - min(x)) / (max(x) - min(x))
+}
+train.y=scale_01(train_y)
+test.y=scale_01(test_y)
+
+### create dummy variables
+dummy_train_x=model.matrix(X1~., dat=train)[,-1]
+dummy_test_x=model.matrix(X1~., data=test)[,-1]
+
+dummy_train=data.frame(cbind(train.y,dummy_train_x))
+names(dummy_train)[names(dummy_train)=="train.y"]="X1"
+
+dummy_test=data.frame(cbind(test.y, dummy_test_x))
+names(dummy_test)[names(dummy_test)=="test.y"]="X1"
+
+set.seed(9933)
+model.nn=neuralnet(X1~., data=dummy_train, hidden = 3, err.fct="sse",linear.output = F)
+plot(model.nn)
+predict.nn=compute(model.nn, dummy_test[, -c(1)])
+```
+
+
+```{r}
+nn.se=sum((predict.nn$net.result-test.y)^2)/2
+nn.se
+```
+
+## 5. Conclusion
+Fit neural network model with 3 hidden layers. The mean squared error of the neural network model is 7.16.
+Compare mean squared error from the previous five models, then the conclusion is that the Random Forest model has minimal MSE. To better know the accuracies of these models, resampling and test will be helpful.
+```{r}
+model_name=c("Random Forest", "Boosting", "Lasso", "Linear Regression","Neural Network")
+mse_value=c(rf.se, boost.se, lasso.se, lr.se, nn.se)
+MSE=data.frame(model_name, mse_value)
+MSE
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
